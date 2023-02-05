@@ -32,9 +32,14 @@ impl ProtocolDataUnit {
             end: 0x16,
         }
     }
+    /**
+     * 
+     */
     pub fn from_cmd(addr: &str, c: &str, data: &Vec<&str>) -> Result<Self, Error> {
         let mut pdu = Self::default();
-        pdu.address = Bytes::from(hex::decode(addr)?);
+        let mut address = hex::decode(addr)?;
+        address.reverse();
+        pdu.address = Bytes::from(address);
         match Bytes::from(hex::decode(c)?).get(0) {
             Some(&c) => pdu.c = c,
             None => return Err("c is invalid".into()),
@@ -50,7 +55,7 @@ impl ProtocolDataUnit {
                 }
                 Err(e) => Err(e),
             })?;
-        pdu.data = Bytes::from(data);    
+        pdu.data = Bytes::from(data);
         pdu.compute_cs();
         Ok(pdu)
     }
