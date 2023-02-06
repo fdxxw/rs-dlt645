@@ -1,3 +1,5 @@
+use std::vec;
+
 use bytes::Bytes;
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -10,36 +12,36 @@ pub enum Frame {
 
 #[derive(Clone, Debug)]
 pub struct ProtocolDataUnit {
-    front: Bytes,   // 在主站发送帧信息之前，先发送1—4个字节FEH，以唤醒接收方。
-    start: u8,      // 标识一帧信息的开始，其值为68H=01101000B。
-    address: Bytes, // 地址域 地址域由 6 个字节构成，每字节 2 位 BCD 码 地址域传输时低字节在前，高字节在后。
-    c: u8,          // 控制码 C
-    l: u8,          // 数据域长度  L为数据域的字节数。读数据时L≤200，写数据时L≤50，L=0表示无数据域
-    data: Bytes, // 数据域 数据域包括数据标识、密码、操作者代码、数据、帧序号等，其结构随控制码的功能而改变。传输时发送方按字节进行加33H处理，接收方按字节进行减33H处理。
+    front: Vec<u8>,   // 在主站发送帧信息之前，先发送1—4个字节FEH，以唤醒接收方。
+    start: u8,        // 标识一帧信息的开始，其值为68H=01101000B。
+    address: Vec<u8>, // 地址域 地址域由 6 个字节构成，每字节 2 位 BCD 码 地址域传输时低字节在前，高字节在后。
+    c: u8,            // 控制码 C
+    l: u8,            // 数据域长度  L为数据域的字节数。读数据时L≤200，写数据时L≤50，L=0表示无数据域
+    data: Vec<u8>, // 数据域 数据域包括数据标识、密码、操作者代码、数据、帧序号等，其结构随控制码的功能而改变。传输时发送方按字节进行加33H处理，接收方按字节进行减33H处理。
     cs: u8, // 校验码 从第一个帧起始符开始到校验码之前的所有各字节的模256的和，即各字节二进制算术和，不计超过256的溢出值
     end: u8, // 标识一帧信息的结束，其值为16H=00010110B。
 }
 impl ProtocolDataUnit {
     pub fn new() -> Self {
         ProtocolDataUnit {
-            front: Bytes::from_static(&[0xfe, 0xfe, 0xfe, 0xfe]),
+            front: vec![0xfe,0xfe,0xfe,0xfe],
             start: 0x68,
-            address: Bytes::default(),
+            address: vec![],
             c: 0,
             l: 0,
-            data: Bytes::default(),
+            data: vec![],
             cs: 0,
             end: 0x16,
         }
     }
     /**
-     * 
+     *
      */
     pub fn from_cmd(addr: &str, c: &str, data: &Vec<&str>) -> Result<Self, Error> {
         let mut pdu = Self::default();
         let mut address = hex::decode(addr)?;
         address.reverse();
-        pdu.address = Bytes::from(address);
+        pdu.address = address;
         match Bytes::from(hex::decode(c)?).get(0) {
             Some(&c) => pdu.c = c,
             None => return Err("c is invalid".into()),
@@ -47,7 +49,14 @@ impl ProtocolDataUnit {
         let data = data
             .iter()
             .map(|t| hex::decode(t))
-            .map(|t| t.map(|q| q.iter().map(|v| v + 0x33).rev().collect::<Vec<u8>>()))
+            .map(|t| {
+                t.map(|q| {
+                    q.iter()
+                        .map(|v| (*v as u32 + 0x33 as u32) as u8)
+                        .rev()
+                        .collect::<Vec<u8>>()
+                })
+            })
             .try_fold(Vec::new(), |mut b, v| match v {
                 Ok(mut v) => {
                     b.append(&mut v);
@@ -55,17 +64,72 @@ impl ProtocolDataUnit {
                 }
                 Err(e) => Err(e),
             })?;
-        pdu.data = Bytes::from(data);
+        pdu.data = data;
         pdu.compute_cs();
+        pdu.l = pdu.data.len() as u8;
+        Ok(pdu)
+    }
+    pub fn from_cmd_2(addr: Vec<u8>, c: u8, data: &Vec<Vec<u8>>) -> Result<Self, Error> {
+        let mut pdu = Self::default();
+        let mut addr = addr;
+        addr.reverse();
+        pdu.address = addr;
+        pdu.c = c;
+        let data = data
+            .iter()
+            .map(|t| t.iter().map(|v| v + 0x33).rev().collect::<Vec<u8>>())
+            .fold(Vec::new(), |mut b, mut v| {
+                b.append(&mut v);
+                b
+            });
+        pdu.data = data;
+        pdu.compute_cs();
+        pdu.l = pdu.data.len() as u8;
         Ok(pdu)
     }
     pub fn compute_cs(&mut self) {
         let r = self.data.iter().map(|t| *t as u32).sum::<u32>() % 256;
-        self.l = r as u8;
+        self.cs = r as u8;
     }
 }
 impl Default for ProtocolDataUnit {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Into<Vec<u8>> for ProtocolDataUnit {
+  fn into(mut self) -> Vec<u8> {
+      let mut v = vec![];
+      self.l = self.data.len() as u8;
+      self.compute_cs();
+      v.append(&mut self.front);
+      v.push(0x68);
+      v.append(&mut self.address);
+      v.push(0x68);
+      v.push(self.c);
+      v.push(self.l);
+      v.append(&mut self.data);
+      v.push(self.cs);
+      v.push(self.end);
+      v
+  }
+}
+impl Into<String> for ProtocolDataUnit {
+  fn into(self) -> String {
+      let v: Vec<u8> = self.into();
+      hex::encode(v)
+  }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_cmd() {
+        let pdu = ProtocolDataUnit::from_cmd("202208310002", "11", &vec!["028022FF"]);
+        println!("{:?}", pdu);
+        assert_eq!(Into::<String>::into(pdu.unwrap()), "true".to_string());
     }
 }
