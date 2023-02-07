@@ -1,7 +1,6 @@
 use std::vec;
 
 use bytes::Bytes;
-
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 
 #[derive(Clone, Debug)]
@@ -65,7 +64,6 @@ impl ProtocolDataUnit {
                 Err(e) => Err(e),
             })?;
         pdu.data = data;
-        pdu.compute_cs();
         pdu.l = pdu.data.len() as u8;
         Ok(pdu)
     }
@@ -83,13 +81,12 @@ impl ProtocolDataUnit {
                 b
             });
         pdu.data = data;
-        pdu.compute_cs();
         pdu.l = pdu.data.len() as u8;
         Ok(pdu)
     }
-    pub fn compute_cs(&mut self) {
-        let r = self.data.iter().map(|t| *t as u32).sum::<u32>() % 256;
-        self.cs = r as u8;
+    pub fn compute_cs(data: &Vec<u8>) -> u8 {
+        let r = data.iter().map(|t| *t as u32).sum::<u32>() % 256;
+        r as u8
     }
 }
 impl Default for ProtocolDataUnit {
@@ -102,17 +99,19 @@ impl Into<Vec<u8>> for ProtocolDataUnit {
   fn into(mut self) -> Vec<u8> {
       let mut v = vec![];
       self.l = self.data.len() as u8;
-      self.compute_cs();
-      v.append(&mut self.front);
       v.push(0x68);
       v.append(&mut self.address);
       v.push(0x68);
       v.push(self.c);
       v.push(self.l);
       v.append(&mut self.data);
+      self.cs = Self::compute_cs(&v);
       v.push(self.cs);
       v.push(self.end);
-      v
+      let mut final_v = vec![];
+      final_v.append(&mut self.front);
+      final_v.append(&mut v);
+      final_v
   }
 }
 impl Into<String> for ProtocolDataUnit {
@@ -125,11 +124,18 @@ impl Into<String> for ProtocolDataUnit {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    use test::Bencher;
     #[test]
     fn from_cmd() {
         let pdu = ProtocolDataUnit::from_cmd("202208310002", "11", &vec!["028022FF"]);
-        println!("{:?}", pdu);
-        assert_eq!(Into::<String>::into(pdu.unwrap()), "true".to_string());
+        assert_eq!(pdu.is_ok(), true);
+        assert_eq!(Into::<String>::into(pdu.unwrap()), "fefefefe680200310822206811043255b335d116".to_string());
+    }
+    #[bench]
+    fn from_cmd_bench(b: &mut Bencher) {
+        b.iter(|| {
+            let pdu = ProtocolDataUnit::from_cmd("202208310002", "11", &vec!["028022FF"]).unwrap();
+            Into::<String>::into(pdu)
+        });
     }
 }

@@ -1,3 +1,5 @@
+#![feature(test)]
+extern crate test;
 pub fn add(left: usize, right: usize) -> usize {
     left + right
 }
