@@ -1,6 +1,9 @@
-use std::vec;
+use std::{
+    io::{Cursor, Seek},
+    vec,
+};
 
-use bytes::Bytes;
+use bytes::{Buf, Bytes};
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 
 #[derive(Clone, Debug)]
@@ -20,10 +23,13 @@ pub struct ProtocolDataUnit {
     cs: u8, // 校验码 从第一个帧起始符开始到校验码之前的所有各字节的模256的和，即各字节二进制算术和，不计超过256的溢出值
     end: u8, // 标识一帧信息的结束，其值为16H=00010110B。
 }
+pub enum TryFromError {
+    INVALID,
+}
 impl ProtocolDataUnit {
     pub fn new() -> Self {
         ProtocolDataUnit {
-            front: vec![0xfe,0xfe,0xfe,0xfe],
+            front: vec![0xfe, 0xfe, 0xfe, 0xfe],
             start: 0x68,
             address: vec![],
             c: 0,
@@ -75,7 +81,12 @@ impl ProtocolDataUnit {
         pdu.c = c;
         let data = data
             .iter()
-            .map(|t| t.iter().map(|v| v + 0x33).rev().collect::<Vec<u8>>())
+            .map(|t| {
+                t.iter()
+                    .map(|v| (*v as u32 + 0x33 as u32) as u8)
+                    .rev()
+                    .collect::<Vec<u8>>()
+            })
             .fold(Vec::new(), |mut b, mut v| {
                 b.append(&mut v);
                 b
@@ -96,29 +107,61 @@ impl Default for ProtocolDataUnit {
 }
 
 impl Into<Vec<u8>> for ProtocolDataUnit {
-  fn into(mut self) -> Vec<u8> {
-      let mut v = vec![];
-      self.l = self.data.len() as u8;
-      v.push(0x68);
-      v.append(&mut self.address);
-      v.push(0x68);
-      v.push(self.c);
-      v.push(self.l);
-      v.append(&mut self.data);
-      self.cs = Self::compute_cs(&v);
-      v.push(self.cs);
-      v.push(self.end);
-      let mut final_v = vec![];
-      final_v.append(&mut self.front);
-      final_v.append(&mut v);
-      final_v
-  }
+    fn into(mut self) -> Vec<u8> {
+        let mut v = vec![];
+        self.l = self.data.len() as u8;
+        v.push(0x68);
+        v.append(&mut self.address);
+        v.push(0x68);
+        v.push(self.c);
+        v.push(self.l);
+        v.append(&mut self.data);
+        self.cs = Self::compute_cs(&v);
+        v.push(self.cs);
+        v.push(self.end);
+        let mut final_v = vec![];
+        final_v.append(&mut self.front);
+        final_v.append(&mut v);
+        final_v
+    }
 }
 impl Into<String> for ProtocolDataUnit {
-  fn into(self) -> String {
-      let v: Vec<u8> = self.into();
-      hex::encode(v)
-  }
+    fn into(self) -> String {
+        let v: Vec<u8> = self.into();
+        hex::encode(v)
+    }
+}
+
+impl TryFrom<String> for ProtocolDataUnit {
+    type Error = TryFromError;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        let mut pdu = ProtocolDataUnit::default();
+        Ok(pdu)
+    }
+}
+
+impl TryFrom<Vec<u8>> for ProtocolDataUnit {
+    type Error = TryFromError;
+    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
+        let mut pdu = ProtocolDataUnit::default();
+        for b in value.iter() {
+            if *b == 0xfe_u8 {
+                pdu.front.push(*b);
+            } else {
+                break;
+            }
+        }
+        let mut cursor = Cursor::new(value);
+        if cursor.remaining() < pdu.front.len() + 1 {
+            return Err(TryFromError::INVALID);
+        }
+        cursor.advance(pdu.front.len() + 1);
+        if cursor.remaining() < 6 {
+            return Err(TryFromError::INVALID);
+        }
+        // cursor.get_ref()[]
+        Ok(pdu)
+    }
 }
 
 #[cfg(test)]
@@ -129,12 +172,41 @@ mod tests {
     fn from_cmd() {
         let pdu = ProtocolDataUnit::from_cmd("202208310002", "11", &vec!["028022FF"]);
         assert_eq!(pdu.is_ok(), true);
-        assert_eq!(Into::<String>::into(pdu.unwrap()), "fefefefe680200310822206811043255b335d116".to_string());
+        assert_eq!(
+            Into::<String>::into(pdu.unwrap()),
+            "fefefefe680200310822206811043255b335d116".to_string()
+        );
+    }
+    #[test]
+    fn from_cmd_2() {
+        let pdu = ProtocolDataUnit::from_cmd_2(
+            vec![0x20, 0x22, 0x08, 0x31, 0x00, 0x02],
+            0x11,
+            &vec![vec![0x02, 0x80, 0x22, 0xff]],
+        );
+        assert_eq!(pdu.is_ok(), true);
+        assert_eq!(
+            Into::<String>::into(pdu.unwrap()),
+            "fefefefe680200310822206811043255b335d116".to_string()
+        );
     }
     #[bench]
     fn from_cmd_bench(b: &mut Bencher) {
         b.iter(|| {
             let pdu = ProtocolDataUnit::from_cmd("202208310002", "11", &vec!["028022FF"]).unwrap();
+            Into::<String>::into(pdu)
+        });
+    }
+
+    #[bench]
+    fn from_cmd_2_bench(b: &mut Bencher) {
+        b.iter(|| {
+            let pdu = ProtocolDataUnit::from_cmd_2(
+                vec![0x20, 0x22, 0x08, 0x31, 0x00, 0x02],
+                0x11,
+                &vec![vec![0x02, 0x80, 0x22, 0xff]],
+            )
+            .unwrap();
             Into::<String>::into(pdu)
         });
     }
