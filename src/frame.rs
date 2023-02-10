@@ -23,6 +23,7 @@ pub struct ProtocolDataUnit {
     cs: u8, // 校验码 从第一个帧起始符开始到校验码之前的所有各字节的模256的和，即各字节二进制算术和，不计超过256的溢出值
     end: u8, // 标识一帧信息的结束，其值为16H=00010110B。
 }
+#[derive(Debug)]
 pub enum TryFromError {
     INVALID,
 }
@@ -110,9 +111,9 @@ impl Into<Vec<u8>> for ProtocolDataUnit {
     fn into(mut self) -> Vec<u8> {
         let mut v = vec![];
         self.l = self.data.len() as u8;
-        v.push(0x68);
+        v.push(self.start);
         v.append(&mut self.address);
-        v.push(0x68);
+        v.push(self.start);
         v.push(self.c);
         v.push(self.l);
         v.append(&mut self.data);
@@ -132,11 +133,14 @@ impl Into<String> for ProtocolDataUnit {
     }
 }
 
-impl TryFrom<String> for ProtocolDataUnit {
+impl TryFrom<&str> for ProtocolDataUnit {
     type Error = TryFromError;
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        let mut pdu = ProtocolDataUnit::default();
-        Ok(pdu)
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        let v = value.replace(" ", "");
+        match hex::decode(v) {
+            Ok(v) => ProtocolDataUnit::try_from(v),
+            Err(_) => Err(TryFromError::INVALID),
+        }
     }
 }
 
@@ -144,6 +148,8 @@ impl TryFrom<Vec<u8>> for ProtocolDataUnit {
     type Error = TryFromError;
     fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
         let mut pdu = ProtocolDataUnit::default();
+        // 帧起始符
+        pdu.front.clear();
         for b in value.iter() {
             if *b == 0xfe_u8 {
                 pdu.front.push(*b);
@@ -152,14 +158,51 @@ impl TryFrom<Vec<u8>> for ProtocolDataUnit {
             }
         }
         let mut cursor = Cursor::new(value);
-        if cursor.remaining() < pdu.front.len() + 1 {
+        cursor.advance(pdu.front.len());
+
+        // 0x68
+        if cursor.remaining() < 1 {
             return Err(TryFromError::INVALID);
         }
-        cursor.advance(pdu.front.len() + 1);
+        cursor.advance(1);
+        // 地址域
         if cursor.remaining() < 6 {
             return Err(TryFromError::INVALID);
         }
-        // cursor.get_ref()[]
+        let address = &cursor.chunk()[..6];
+        pdu.address = Vec::from(address);
+        cursor.advance(6);
+        // 0x68
+        if cursor.remaining() < 1 {
+            return Err(TryFromError::INVALID);
+        }
+        cursor.advance(1);
+        // 控制码 C
+        if cursor.remaining() < 1 {
+            return Err(TryFromError::INVALID);
+        }
+        pdu.c = cursor.get_u8();
+        // 数据域长度
+        if cursor.remaining() < 1 {
+            return Err(TryFromError::INVALID);
+        }
+        pdu.l = cursor.get_u8();
+        // 数据
+        if cursor.remaining() < (pdu.l as usize) {
+            return Err(TryFromError::INVALID);
+        }
+        pdu.data = Vec::from(&cursor.chunk()[..(pdu.l as usize)]);
+        cursor.advance(pdu.l as usize);
+        // 校验码
+        if cursor.remaining() < 1 {
+            return Err(TryFromError::INVALID);
+        }
+        pdu.cs = cursor.get_u8();
+        // 结束符
+        if cursor.remaining() < 1 {
+            return Err(TryFromError::INVALID);
+        }
+        pdu.end = cursor.get_u8();
         Ok(pdu)
     }
 }
@@ -190,6 +233,27 @@ mod tests {
             "fefefefe680200310822206811043255b335d116".to_string()
         );
     }
+    #[test]
+    fn try_from_string() {
+        let pdu = ProtocolDataUnit::try_from("fe  fefefe680200310822206811043255b335d116");
+        assert!(pdu.is_ok());
+        assert_eq!(
+            Into::<String>::into(pdu.unwrap()),
+            "fefefefe680200310822206811043255b335d116".to_string()
+        );
+    }
+    #[test]
+    fn try_from_vec() {
+        let pdu = ProtocolDataUnit::try_from(vec![
+            0xfe, 0xfe, 0xfe, 0xfe, 0x68, 0x02, 0x00, 0x31, 0x08, 0x22, 0x20, 0x68, 0x11, 0x04,
+            0x32, 0x55, 0xb3, 0x35, 0xd1, 0x16,
+        ]);
+        assert!(pdu.is_ok());
+        assert_eq!(
+            Into::<String>::into(pdu.unwrap()),
+            "fefefefe680200310822206811043255b335d116".to_string()
+        );
+    }
     #[bench]
     fn from_cmd_bench(b: &mut Bencher) {
         b.iter(|| {
@@ -208,6 +272,19 @@ mod tests {
             )
             .unwrap();
             Into::<String>::into(pdu)
+        });
+    }
+    #[bench]
+    fn try_from_string_bench(b: &mut Bencher) {
+        b.iter(|| ProtocolDataUnit::try_from("fefefefe680200310822206811043255b335d116"));
+    }
+    #[bench]
+    fn try_from_vec_bench(b: &mut Bencher) {
+        b.iter(|| {
+            ProtocolDataUnit::try_from(vec![
+                0xfe, 0xfe, 0xfe, 0xfe, 0x68, 0x02, 0x00, 0x31, 0x08, 0x22, 0x20, 0x68, 0x11, 0x04,
+                0x32, 0x55, 0xb3, 0x35, 0xd1, 0x16,
+            ])
         });
     }
 }
