@@ -8,3 +8,5 @@ edition = "2021"
 [dependencies]
 bytes = "1"
 hex = "0.4"
+tokio-serial = "5.4"
+tokio-util = "0.7.6"

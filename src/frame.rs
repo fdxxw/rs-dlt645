@@ -100,6 +100,16 @@ impl ProtocolDataUnit {
         let r = data.iter().map(|t| *t as u32).sum::<u32>() % 256;
         r as u8
     }
+    pub fn read_addr() -> Result<Self, Error> {
+        Self::from_cmd_2(vec![0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA], 0x13, &vec![])
+    }
+    pub fn set_addr() -> Result<Self, Error> {
+        Self::from_cmd_2(
+            vec![0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA],
+            0x15,
+            &vec![vec![0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA]],
+        )
+    }
 }
 impl Default for ProtocolDataUnit {
     fn default() -> Self {
