@@ -4,6 +4,7 @@ pub fn add(left: usize, right: usize) -> usize {
     left + right
 }
 
+mod error;
 mod frame;
 mod packager;
 mod transporter;

@@ -1,7 +1,10 @@
-use crate::frame::Error;
+use async_trait::async_trait;
 
+use crate::error::Error;
+
+#[async_trait]
 pub trait Transporter {
-    fn send(adu: &Vec<u8>) -> Result<Vec<u8>, Error>;
-    fn open() -> Result<(), Error>;
-    fn close() -> Result<(), Error>;
+    async fn send(&mut self, adu: &[u8]) -> Result<Vec<u8>, Error>;
+    async fn open(&mut self) -> Result<(), Error>;
+    async fn close(&mut self) -> Result<(), Error>;
 }

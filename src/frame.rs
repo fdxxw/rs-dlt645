@@ -4,12 +4,25 @@ use std::{
 };
 
 use bytes::{Buf, Bytes};
-pub type Error = Box<dyn std::error::Error + Send + Sync>;
+
+use crate::error::Error;
 
 #[derive(Clone, Debug)]
 pub enum Frame {
     Error(String),
     Content(ProtocolDataUnit),
+}
+
+#[derive(Debug)]
+pub enum FrameError {
+    Incomplete,
+    Other(Error)
+}
+
+impl Frame {
+    pub fn check(src: &mut Cursor<&[u8]>) -> Result<(), Error> {
+        
+    }
 }
 
 #[derive(Clone, Debug)]
