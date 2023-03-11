@@ -9,5 +9,8 @@ edition = "2021"
 bytes = "1"
 hex = "0.4"
 tokio-serial = "5.4"
-tokio-util = "0.7.6"
+tokio-util = {version = "0.7.6", features=["codec"]}
 async-trait = "0.1"
+tokio-test = "0.4.2"
+tokio = {version = "1", futures = ["full", "test"]}
+futures = "0.3.26"

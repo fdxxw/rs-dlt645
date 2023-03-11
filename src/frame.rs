@@ -1,28 +1,132 @@
-use std::{
-    io::{Cursor, Seek},
-    vec,
-};
+use std::{io::Cursor, vec};
 
 use bytes::{Buf, Bytes};
 
 use crate::error::Error;
 
 #[derive(Clone, Debug)]
-pub enum Frame {
-    Error(String),
-    Content(ProtocolDataUnit),
-}
+pub enum Frame {}
 
 #[derive(Debug)]
 pub enum FrameError {
     Incomplete,
-    Other(Error)
+    Other(Error),
+}
+
+impl Into<Error> for FrameError {
+    fn into(self) -> Error {
+        match self {
+            Self::Incomplete => "Incomplete".into(),
+            Self::Other(e) => e,
+        }
+    }
 }
 
 impl Frame {
-    pub fn check(src: &mut Cursor<&[u8]>) -> Result<(), Error> {
-        
+    pub fn check(src: &mut Cursor<&[u8]>) -> Result<(), FrameError> {
+        // 跳过 0xfe
+        loop {
+            let v = get_u8(src)?;
+            if v != 0xfe {
+                // 0x68
+                if v == 0x68 {
+                    break;
+                } else {
+                    return Err(FrameError::Other(
+                        format!("protocol error; invalid frame type byte `{}`", v).into(),
+                    ));
+                }
+            }
+        }
+        // 地址 6 个字节
+        skip(src, 6)?;
+        // 0x68
+        get_u8_expect(src, 0x68)?;
+        // 控制码 C
+        skip(src, 1)?;
+        // 数据长度
+        let len = get_u8(src)?;
+        // 数据域
+        skip(src, len as usize)?;
+        //
+        skip(src, 2)?;
+        Ok(())
     }
+
+    pub fn parse(src: &mut Cursor<&[u8]>) -> Result<ProtocolDataUnit, FrameError> {
+        let mut b = Vec::new();
+         // 跳过 0xfe
+         loop {
+            let v = get_u8(src)?;
+            if v != 0xfe {
+                // 0x68
+                if v == 0x68 {
+                    b.push(0x68);
+                    break;
+                } else {
+                    return Err(FrameError::Other(
+                        format!("protocol error; invalid frame type byte `{}`", v).into(),
+                    ));
+                }
+            }
+            b.push(0xfe);
+        }
+        // 地址
+        b.extend_from_slice(get_u8_of(src, 6)?);
+        // 0x68
+        get_u8_expect(src, 0x68)?;
+        b.push(0x68);
+
+        // C
+        b.push(get_u8(src)?);
+        // data len
+        let len = get_u8(src)?;
+        b.push(len);
+
+        b.extend_from_slice(get_u8_of(src, len as usize)?);
+
+        b.extend_from_slice(get_u8_of(src, 2)?);
+        match ProtocolDataUnit::try_from(b) {
+            Ok(f) => return Ok(f),
+            Err(e) => return Err(FrameError::Other(e.into())),
+        }
+    }
+}
+
+fn get_u8(src: &mut Cursor<&[u8]>) -> Result<u8, FrameError> {
+    if !src.has_remaining() {
+        return Err(FrameError::Incomplete);
+    }
+
+    Ok(src.get_u8())
+}
+fn get_u8_expect(src: &mut Cursor<&[u8]>, expect: u8) -> Result<(), FrameError> {
+    let u8 = get_u8(src)?;
+    if u8 != expect {
+        return Err(FrameError::Other(
+            format!("protocol error; invalid frame type byte `{}`", u8).into(),
+        ));
+    }
+    Ok(())
+}
+fn skip(src: &mut Cursor<&[u8]>, n: usize) -> Result<(), FrameError> {
+    if src.remaining() < n {
+        return Err(FrameError::Incomplete);
+    }
+
+    src.advance(n);
+    Ok(())
+}
+fn get_u8_of<'a>(src: &mut Cursor<&'a [u8]>, n: usize) -> Result<&'a [u8], FrameError> {
+    // Scan the bytes directly
+    let start = src.position() as usize;
+    // Scan to the second to last byte
+    let end = start + n;
+    if src.remaining() < n {
+        return Err(FrameError::Incomplete);
+    }
+    src.set_position(end as u64);
+    Ok(&src.get_ref()[start..end])
 }
 
 #[derive(Clone, Debug)]
@@ -39,6 +143,13 @@ pub struct ProtocolDataUnit {
 #[derive(Debug)]
 pub enum TryFromError {
     INVALID,
+}
+impl Into<Error> for TryFromError {
+    fn into(self) -> Error {
+        match self {
+            Self::INVALID => "invalid".into(),
+        }
+    }
 }
 impl ProtocolDataUnit {
     pub fn new() -> Self {
