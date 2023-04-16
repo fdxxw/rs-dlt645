@@ -9,6 +9,7 @@ mod frame;
 mod packager;
 mod transporter;
 mod rs485;
+mod tcp;
 #[cfg(test)]
 mod tests {
     use super::*;

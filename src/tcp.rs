@@ -1,4 +1,4 @@
-use std::io::{Cursor, Read, Write};
+use std::io::{Cursor};
 use std::time::Duration;
 
 use crate::error::Error;
@@ -8,29 +8,29 @@ use async_trait::async_trait;
 use bytes::{Buf, BufMut, BytesMut};
 use futures::stream::StreamExt;
 use futures::SinkExt;
+use tokio::net::{TcpStream};
 use tokio::time::timeout;
-use tokio_serial::{self, SerialPort, SerialPortBuilder, SerialPortBuilderExt, SerialStream};
 use tokio_util::codec::{Decoder, Encoder};
 
-pub struct RS485Transporter {
-    builder: SerialPortBuilder,
-    stream: Option<SerialStream>,
+pub struct TcpTransporter {
+    addr: String,
     timeout: Duration,
+    stream: Option<TcpStream>,
 }
 
-struct RS485Codec;
+struct TcpCodec;
 
-impl RS485Transporter {
-    pub fn new(builder: SerialPortBuilder) -> Self {
+impl TcpTransporter {
+    pub fn new(addr: &str) -> Self {
         Self {
-            builder,
+            addr: addr.to_string(),
+            timeout: Duration::from_secs(1),
             stream: None,
-            timeout: Duration::from_millis(1),
         }
     }
 }
 
-impl Encoder<&[u8]> for RS485Codec {
+impl Encoder<&[u8]> for TcpCodec {
     type Error = Error;
     fn encode(&mut self, item: &[u8], dst: &mut BytesMut) -> Result<(), Self::Error> {
         dst.reserve(item.len());
@@ -38,7 +38,7 @@ impl Encoder<&[u8]> for RS485Codec {
         Ok(())
     }
 }
-impl Decoder for RS485Codec {
+impl Decoder for TcpCodec {
     type Error = Error;
     type Item = ProtocolDataUnit;
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
@@ -62,18 +62,17 @@ impl Decoder for RS485Codec {
 }
 
 #[async_trait]
-impl Transporter for RS485Transporter {
+impl Transporter for TcpTransporter {
     async fn send(&mut self, adu: &[u8]) -> Result<Option<ProtocolDataUnit>, Error> {
         if let Some(stream) = &mut self.stream {
-            stream.set_timeout(self.timeout)?;
-            match timeout(self.timeout, RS485Codec.framed(stream).send(adu)).await {
-                Ok(_) => {}
-                Err(_) => return Err(format!("send timeout after {:?}", self.timeout).into()),
-            }
+            match timeout(self.timeout, TcpCodec.framed(stream).send(adu)).await {
+              Ok(_) => {}
+              Err(_) => return Err(format!("send timeout after {:?}", self.timeout).into()),
+          }
         } else {
             return Err("serial is not opend".into());
         }
-        let mut reader = RS485Codec.framed(self.stream.as_mut().unwrap());
+        let mut reader = TcpCodec.framed(self.stream.as_mut().unwrap());
         match timeout(self.timeout, reader.next()).await {
             Ok(r) => {
                 if let Some(r) = r {
@@ -92,9 +91,14 @@ impl Transporter for RS485Transporter {
         Ok(None)
     }
     async fn open(&mut self) -> Result<(), Error> {
-        let r = self.builder.clone().open_native_async()?;
-        self.stream = Some(r);
-        Ok(())
+      match timeout(self.timeout, TcpStream::connect(&self.addr)).await {
+          Ok(Ok(stream)) => {
+            self.stream = Some(stream);
+            Ok(())
+          },
+          Ok(Err(e)) => return Err(format!("connection error: {}", e).into()),
+          Err(_) => return Err(format!("connection timed out after {:?}", self.timeout).into()),
+      }
     }
     async fn close(&mut self) -> Result<(), Error> {
         if let Some(_) = &mut self.stream {
@@ -104,11 +108,11 @@ impl Transporter for RS485Transporter {
     }
 }
 
+
 #[cfg(test)]
 mod tests {
     use std::time::Instant;
 
-    use tokio_serial::{DataBits, Parity, StopBits};
     use tokio_test::block_on;
 
     use crate::frame::ProtocolDataUnit;
@@ -118,29 +122,25 @@ mod tests {
     #[test]
     fn test() {
         block_on(async {
-            let builder = tokio_serial::new("COM3", 2400)
-                .data_bits(DataBits::Eight)
-                .parity(Parity::Even)
-                .stop_bits(StopBits::One);
-            let mut rs485 = RS485Transporter::new(builder);
-            rs485.open().await.unwrap();
+            let mut tcp = TcpTransporter::new("127.0.0.1:8000");
+            tcp.open().await.unwrap();
             let adu: Vec<u8> =
                 ProtocolDataUnit::try_from("fe fe fe fe 68 aa aa aa aa aa aa 68 13 00 df 16")
                     .unwrap()
                     .into();
             for _ in 1..=10 {
-                let start = Instant::now();
-
-                let r = rs485.send(&adu).await;
-                match r {
-                    Ok(frame) => {
-                        println!("{:?}", Into::<String>::into(frame.unwrap()));
-                    }
-                    Err(e) => {
-                        eprintln!("Err：{}", e)
-                    }
-                }
-                println!("Elapsed time: {:?}", start.elapsed());
+              let start = Instant::now();
+  
+              let r = tcp.send(&adu).await;
+              match r {
+                  Ok(frame) => {
+                      println!("{:?}", Into::<String>::into(frame.unwrap()));
+                  }
+                  Err(e) => {
+                      eprintln!("Err：{}", e)
+                  }
+              }
+              println!("Elapsed time: {:?}", start.elapsed());
             }
         })
     }
