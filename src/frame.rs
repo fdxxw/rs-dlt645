@@ -55,8 +55,8 @@ impl Frame {
 
     pub fn parse(src: &mut Cursor<&[u8]>) -> Result<ProtocolDataUnit, FrameError> {
         let mut b = Vec::new();
-         // 跳过 0xfe
-         loop {
+        // 跳过 0xfe
+        loop {
             let v = get_u8(src)?;
             if v != 0xfe {
                 // 0x68
@@ -233,6 +233,23 @@ impl ProtocolDataUnit {
             0x15,
             &vec![vec![0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA]],
         )
+    }
+    pub fn address(&self) -> Vec<u8> {
+        self.address.clone()
+    }
+    pub fn address_str(&self) -> String {
+        hex::encode(&self.address)
+    }
+    pub fn address_real_str(&self) -> String {
+        let mut addr = self.address.clone();
+        addr.reverse();
+        hex::encode(addr)
+    }
+    pub fn data(&self) -> Vec<u8> {
+        self.data.clone()
+    }
+    pub fn c(&self) -> u8 {
+        self.c
     }
 }
 impl Default for ProtocolDataUnit {
