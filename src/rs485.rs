@@ -18,7 +18,7 @@ pub struct RS485Transporter {
     timeout: Duration,
 }
 
-struct RS485Codec;
+pub struct RS485Codec;
 
 impl RS485Transporter {
     pub fn new(builder: SerialPortBuilder) -> Self {
